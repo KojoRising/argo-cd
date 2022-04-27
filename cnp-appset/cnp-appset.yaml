@@ -38,7 +38,7 @@ spec:
                 repoURL: https://github.com/KojoRising/argo-cd.git
                 revision: feat/test-cnp-appset-1
                 files:
-                  - path: "cnp-appset/config/*/*.yaml"
+                  - path: "cnp-appset/config/**/*.yaml"
             - clusters:
                 selector:
                   matchLabels:
@@ -50,7 +50,7 @@ spec:
                 repoURL: https://github.com/KojoRising/argo-cd.git
                 revision: feat/test-cnp-appset-1
                 files:
-                  - path: "cnp-appset/config/*/*.yaml"
+                  - path: "cnp-appset/config/**/*.yaml"
             - clusters:
                 selector:
                   matchLabels:
