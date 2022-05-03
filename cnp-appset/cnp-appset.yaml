@@ -1,25 +1,24 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  name: fake-enforcer-appset
+  name: all-aladdin-appset
   namespace: argocd
 spec:
   generators:
   - merge:
       mergeKeys: [name] # ie. padm-tkgi-hal, bis-aks-astra-mnlw1, etc.
       generators:
-#      - matrix:
-#          generators:
-#            - git:
-#                repoURL: https://github.com/KojoRising/argo-cd.git
-#                revision: feat/test-cnp-appset-1
-#                files:
-#                  - path: "cnp-appset/config/**/*.yaml"
-#            - clusters:
-#                selector:
-#                  matchLabels:
-#                    argocd.argoproj.io/secret-type: cluster
-#                    kubernetes.cnp.io/cluster.name: '{{path.basename}}'
+      - matrix: # Base Items
+          generators:
+            - git:
+                repoURL: https://github.com/KojoRising/argo-cd.git
+                revision: feat/test-cnp-appset-1
+                files:
+                  - path: "cnp-appset/config/**/*.yaml"
+            - clusters:
+                selector:
+                  matchLabels:
+                    argocd.argoproj.io/secret-type: cluster
       - matrix: # Jurisdiction Overrides
           generators:
             - git:
@@ -56,10 +55,30 @@ spec:
                   matchLabels:
                     argocd.argoproj.io/secret-type: cluster
                     kubernetes.cnp.io/environment: '{{path.basename}}'
-#                  matchExpressions:
-#
-#                    - { key: kubernetes.cnp.io/environment, operator: In, values: [ '{{path.basename}}' ] }
-#                  - { key: kubernetes.cnp.io/cluster.jurisdiction, operator: In, values: [ '{{path.basename}}' ] }
+      - matrix: # Region Overrides
+          generators:
+            - git:
+                repoURL: https://github.com/KojoRising/argo-cd.git
+                revision: feat/test-cnp-appset-1
+                files:
+                  - path: "cnp-appset/config/**/*.yaml"
+            - clusters:
+                selector:
+                  matchLabels:
+                    argocd.argoproj.io/secret-type: cluster
+                    kubernetes.cnp.io/cluster.region: '{{path.basename}}'
+      - matrix: # Per-Cluster Overrides
+          generators:
+            - git:
+                repoURL: https://github.com/KojoRising/argo-cd.git
+                revision: feat/test-cnp-appset-1
+                files:
+                  - path: "cnp-appset/config/**/*.yaml"
+            - clusters:
+                selector:
+                  matchLabels:
+                    argocd.argoproj.io/secret-type: cluster
+                    kubernetes.cnp.io/cluster.name: '{{path.basename}}'
   template:
     metadata:
       name: 'fake-appset-{{path.basename}}'
