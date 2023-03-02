@@ -2,6 +2,7 @@ package generators
 
 import (
 	"context"
+	"github.com/sirupsen/logrus"
 	"testing"
 	"time"
 
@@ -835,6 +836,333 @@ func TestInterpolatedMatrixGenerateGoTemplate(t *testing.T) {
 	}
 }
 
+func TestInterpolatedMatrixGitCalls(t *testing.T) {
+	interpolatedGitGenerator := &argoprojiov1alpha1.GitGenerator{
+		RepoURL:  "RepoURL",
+		Revision: "Revision",
+		Files: []argoprojiov1alpha1.GitFileGeneratorItem{
+			{Path: "examples/git-generator-files-discovery/cluster-config/config.json"},
+			//{Path: "examples/git-generator-files-discovery/cluster-config/dev/config.json"},
+			//{Path: "examples/git-generator-files-discovery/cluster-config/prod/config.json"},
+		},
+	}
+
+	interpolatedClusterGenerator := &argoprojiov1alpha1.ClusterGenerator{
+		Selector: metav1.LabelSelector{
+			MatchLabels: nil,
+			MatchExpressions: []metav1.LabelSelectorRequirement{
+				{
+					Key:      "environment",
+					Operator: "Exists",
+					Values:   []string{},
+				},
+			},
+		},
+	}
+	testCases := []struct {
+		name           string
+		baseGenerators []argoprojiov1alpha1.ApplicationSetNestedGenerator
+		expectedErr    error
+		expected       []map[string]interface{}
+		clientError    bool
+	}{
+		{
+			name: "happy flow - generate interpolated params",
+			baseGenerators: []argoprojiov1alpha1.ApplicationSetNestedGenerator{
+				{
+					Clusters: interpolatedClusterGenerator,
+				},
+				{
+					Git: interpolatedGitGenerator,
+				},
+			},
+			expected: []map[string]interface{}{
+				{
+					"path":                        "examples/git-generator-files-discovery/cluster-config",
+					"path.basename":               "cluster-config",
+					"path.basenameNormalized":     "cluster-config",
+					"path.filename":               "config.json",
+					"path.filenameNormalized":     "config.json",
+					"path[0]":                     "examples",
+					"path[1]":                     "git-generator-files-discovery",
+					"path[2]":                     "cluster-config",
+					"name":                        "dev-01",
+					"nameNormalized":              "dev-01",
+					"server":                      "https://dev-01.example.com",
+					"metadata.labels.environment": "dev",
+					"metadata.labels.argocd.argoproj.io/secret-type": "cluster",
+				},
+				{
+					"path":                        "examples/git-generator-files-discovery/cluster-config",
+					"path.basename":               "cluster-config",
+					"path.basenameNormalized":     "cluster-config",
+					"path.filename":               "config.json",
+					"path.filenameNormalized":     "config.json",
+					"path[0]":                     "examples",
+					"path[1]":                     "git-generator-files-discovery",
+					"path[2]":                     "cluster-config",
+					"name":                        "tst-01",
+					"nameNormalized":              "tst-01",
+					"server":                      "https://tst-01.example.com",
+					"metadata.labels.environment": "tst",
+					"metadata.labels.argocd.argoproj.io/secret-type": "cluster",
+				},
+				{
+					"path":                        "examples/git-generator-files-discovery/cluster-config",
+					"path.basename":               "cluster-config",
+					"path.basenameNormalized":     "cluster-config",
+					"path.filename":               "config.json",
+					"path.filenameNormalized":     "config.json",
+					"path[0]":                     "examples",
+					"path[1]":                     "git-generator-files-discovery",
+					"path[2]":                     "cluster-config",
+					"name":                        "prod-01",
+					"nameNormalized":              "prod-01",
+					"server":                      "https://prod-01.example.com",
+					"metadata.labels.environment": "prod",
+					"metadata.labels.argocd.argoproj.io/secret-type": "cluster",
+				},
+				//{
+				//	"path": "examples/git-generator-files-discovery/cluster-config/dev",
+				//	"path.basename": "dev",
+				//	"path.basenameNormalized":"dev",
+				//	"path.filename":"config.json",
+				//	"path.filenameNormalized":"config.json",
+				//	"path[0]":"examples",
+				//	"path[1]":"git-generator-files-discovery",
+				//	"path[2]":"cluster-config",
+				//	"path[3]":"dev",
+				//	"name": "dev-01",
+				//	"nameNormalized": "dev-01",
+				//	"server": "https://dev-01.example.com",
+				//	"metadata.labels.environment": "dev",
+				//	"metadata.labels.argocd.argoproj.io/secret-type": "cluster",
+				//},
+				//{
+				//	"path": "examples/git-generator-files-discovery/cluster-config/prod",
+				//	"path.basename": "prod",
+				//	"path.basenameNormalized": "prod",
+				//	"path.filename":"config.json",
+				//	"path.filenameNormalized":"config.json",
+				//	"path[0]":"examples",
+				//	"path[1]":"git-generator-files-discovery",
+				//	"path[2]":"cluster-config",
+				//	"name": "prod-01",
+				//	"nameNormalized": "prod-01",
+				//	"server": "https://prod-01.example.com",
+				//	"metadata.labels.environment": "prod",
+				//	"metadata.labels.argocd.argoproj.io/secret-type": "cluster"
+				//},
+			},
+			clientError: false,
+		},
+	}
+	clusters := []client.Object{
+		&corev1.Secret{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "Secret",
+				APIVersion: "v1",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "dev-01",
+				Namespace: "namespace",
+				Labels: map[string]string{
+					"argocd.argoproj.io/secret-type": "cluster",
+					"environment":                    "dev",
+				},
+			},
+			Data: map[string][]byte{
+				"config": []byte("{}"),
+				"name":   []byte("dev-01"),
+				"server": []byte("https://dev-01.example.com"),
+			},
+			Type: corev1.SecretType("Opaque"),
+		},
+		&corev1.Secret{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "Secret",
+				APIVersion: "v1",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "tst-01",
+				Namespace: "namespace",
+				Labels: map[string]string{
+					"argocd.argoproj.io/secret-type": "cluster",
+					"environment":                    "tst",
+				},
+			},
+			Data: map[string][]byte{
+				"config": []byte("{}"),
+				"name":   []byte("tst-01"),
+				"server": []byte("https://tst-01.example.com"),
+			},
+			Type: corev1.SecretType("Opaque"),
+		},
+		&corev1.Secret{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "Secret",
+				APIVersion: "v1",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "prod-01",
+				Namespace: "namespace",
+				Labels: map[string]string{
+					"argocd.argoproj.io/secret-type": "cluster",
+					"environment":                    "prod",
+				},
+			},
+			Data: map[string][]byte{
+				"config": []byte("{}"),
+				"name":   []byte("prod-01"),
+				"server": []byte("https://prod-01.example.com"),
+			},
+			Type: corev1.SecretType("Opaque"),
+		},
+	}
+
+	repoFileContents := map[string][]byte{
+		"examples/git-generator-files-discovery/cluster-config/config.json": []byte(`{}`),
+		//"examples/git-generator-files-discovery/cluster-config/dev/config.json": []byte(`{}`),
+		//"examples/git-generator-files-discovery/cluster-config/prod/config.json": []byte(`{}`),
+	}
+
+	//	repoFileContents := map[string][]byte{
+	//		"cluster-config/production/config.json": []byte(`{
+	//   "cluster": {
+	//       "owner": "john.doe@example.com",
+	//       "name": "production",
+	//       "address": "https://kubernetes.default.svc"
+	//   },
+	//   "key1": "val1",
+	//   "key2": {
+	//       "key2_1": "val2_1",
+	//       "key2_2": {
+	//           "key2_2_1": "val2_2_1"
+	//       }
+	//   },
+	//   "key3": 123
+	//}`),
+	//		"cluster-config/staging/config.json": []byte(`{
+	//   "cluster": {
+	//       "owner": "foo.bar@example.com",
+	//       "name": "staging",
+	//       "address": "https://kubernetes.default.svc"
+	//   }
+	//}`),
+	//	}
+
+	// convert []client.Object to []runtime.Object, for use by kubefake package
+	runtimeClusters := []runtime.Object{}
+	for _, clientCluster := range clusters {
+		runtimeClusters = append(runtimeClusters, clientCluster)
+	}
+
+	for _, testCase := range testCases {
+		testCaseCopy := testCase // Since tests may run in parallel
+
+		t.Run(testCaseCopy.name, func(t *testing.T) {
+			genMock := &generatorMock{}
+			appSet := &argoprojiov1alpha1.ApplicationSet{}
+
+			argoCDServiceMock := argoCDServiceMock{mock: &mock.Mock{}}
+			argoCDServiceMock.mock.On("GetFiles", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+				Return(repoFileContents, nil)
+			argoCDServiceMock.mock.On("GenerateParams", mock.AnythingOfType("*v1alpha1.ApplicationSetGenerator"), appSet).Return([]map[string]interface{}{
+				{
+					"path":                    "examples/git-generator-files-discovery/cluster-config/WHHOOOOO",
+					"path.basename":           "cluster-config",
+					"path.basenameNormalized": "cluster-config",
+					"path.filename":           "config.json",
+					"path.filenameNormalized": "config.json",
+					"path[0]":                 "examples",
+					"path[1]":                 "git-generator-files-discovery",
+					"path[2]":                 "cluster-config",
+				},
+			}, nil)
+			var gitGenerator = NewGitGenerator(argoCDServiceMock)
+
+			appClientset := kubefake.NewSimpleClientset(runtimeClusters...)
+			fakeClient := fake.NewClientBuilder().WithObjects(clusters...).Build()
+			cl := &possiblyErroringFakeCtrlRuntimeClient{
+				fakeClient,
+				testCase.clientError,
+			}
+			var clusterGenerator = NewClusterGenerator(cl, context.Background(), appClientset, "namespace")
+			logrus.Debug(clusterGenerator)
+			for _, g := range testCaseCopy.baseGenerators {
+
+				gitGeneratorSpec := argoprojiov1alpha1.ApplicationSetGenerator{
+					Clusters: g.Clusters,
+					Git:      g.Git,
+				}
+
+				//genMock.On("GenerateParams", mock.AnythingOfType("*v1alpha1.ApplicationSetGenerator"), appSet).Return([]map[string]interface{}{
+				//	{
+				//		"path":                    "examples/git-generator-files-discovery/cluster-config/dev/config.json",
+				//		"path.basename":           "dev",
+				//		"path.basenameNormalized": "dev",
+				//	},
+				//	{
+				//		"path":                    "examples/git-generator-files-discovery/cluster-config/prod/config.json",
+				//		"path.basename":           "prod",
+				//		"path.basenameNormalized": "prod",
+				//	},
+				//}, nil)
+				genMock.On("GenerateParams", mock.AnythingOfType("*v1alpha1.ApplicationSetGenerator"), appSet).Return([]map[string]interface{}{
+					{
+						"metadata.labels.argocd.argoproj.io/secret-type": "cluster",
+						"metadata.labels.environment":                    "dev",
+						"name":                                           "dev-01",
+						"nameNormalized":                                 "dev-01",
+						"server":                                         "https://dev-01.example.com",
+					},
+					{
+						"metadata.labels.argocd.argoproj.io/secret-type": "cluster",
+						"metadata.labels.environment":                    "tst",
+						"name":                                           "tst-01",
+						"nameNormalized":                                 "tst-01",
+						"server":                                         "https://tst-01.example.com",
+					},
+					{
+						"metadata.labels.argocd.argoproj.io/secret-type": "cluster",
+						"metadata.labels.environment":                    "prod",
+						"name":                                           "prod-01",
+						"nameNormalized":                                 "prod-01",
+						"server":                                         "https://prod-01.example.com",
+					},
+				}, nil)
+				genMock.On("GetTemplate", &gitGeneratorSpec).
+					Return(&argoprojiov1alpha1.ApplicationSetTemplate{})
+			}
+
+			var matrixGenerator = NewMatrixGenerator(
+				map[string]Generator{
+					"Git":      gitGenerator,
+					"Clusters": genMock,
+				},
+			)
+
+			got, err := matrixGenerator.GenerateParams(&argoprojiov1alpha1.ApplicationSetGenerator{
+				Matrix: &argoprojiov1alpha1.MatrixGenerator{
+					Generators: testCaseCopy.baseGenerators,
+					Template:   argoprojiov1alpha1.ApplicationSetTemplate{},
+				},
+			}, appSet)
+
+			//argoCDServiceMock.mock.AssertNumberOfCalls(t,"GenerateParams",3 )
+			//genMock.AssertNumberOfCalls(t,"GenerateParams",3)
+
+			if testCaseCopy.expectedErr != nil {
+				assert.ErrorIs(t, err, testCaseCopy.expectedErr)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, testCaseCopy.expected, got)
+			}
+
+		})
+	}
+}
+
 type generatorMock struct {
 	mock.Mock
 }
@@ -857,3 +1185,13 @@ func (g *generatorMock) GetRequeueAfter(appSetGenerator *argoprojiov1alpha1.Appl
 	return args.Get(0).(time.Duration)
 
 }
+
+/* Possible Solutions
+1) Do I assert a certain number of calls?
+Assert genMock.AssertNumberOfCalls(t,"GenerateParams",3)
+2) Do I just get the number of method invocations? (maybe logging the GenerateParams function mock?)
+3)
+
+
+
+*/
