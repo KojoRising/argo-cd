@@ -46,6 +46,7 @@ import (
 	mockstatecache "github.com/argoproj/argo-cd/v3/controller/cache/mocks"
 	"github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
 	appclientset "github.com/argoproj/argo-cd/v3/pkg/client/clientset/versioned/fake"
+
 	"github.com/argoproj/argo-cd/v3/reposerver/apiclient"
 	mockrepoclient "github.com/argoproj/argo-cd/v3/reposerver/apiclient/mocks"
 	"github.com/argoproj/argo-cd/v3/test"
@@ -990,7 +991,12 @@ func TestFinalizeAppDeletion(t *testing.T) {
 		app := newFakeAppWithDestName()
 		app.SetCascadedDeletion(v1alpha1.ResourcesFinalizerName)
 		app.DeletionTimestamp = &now
-		ctrl := newFakeController(&fakeData{apps: []runtime.Object{app, &defaultProj}, managedLiveObjs: map[kube.ResourceKey]*unstructured.Unstructured{}}, nil)
+		liveServiceAccount := &unstructured.Unstructured{Object: newFakeServiceAccount()}
+		liveRole := &unstructured.Unstructured{Object: newFakeRole()}
+		ctrl := newFakeController(&fakeData{apps: []runtime.Object{app, &defaultProj}, managedLiveObjs: map[kube.ResourceKey]*unstructured.Unstructured{
+			kube.GetResourceKey(liveServiceAccount): liveServiceAccount,
+			kube.GetResourceKey(liveRole):           liveRole,
+		}}, nil)
 		patched := false
 		fakeAppCs := ctrl.applicationClientset.(*appclientset.Clientset)
 		defaultReactor := fakeAppCs.ReactionChain[0]
@@ -998,10 +1004,23 @@ func TestFinalizeAppDeletion(t *testing.T) {
 		fakeAppCs.AddReactor("get", "*", func(action kubetesting.Action) (handled bool, ret runtime.Object, err error) {
 			return defaultReactor.React(action)
 		})
-		fakeAppCs.AddReactor("patch", "*", func(_ kubetesting.Action) (handled bool, ret runtime.Object, err error) {
-			patched = true
-			return true, &v1alpha1.Application{}, nil
-		})
+		//fakeAppCs.AddReactor("patch", "*", func(_ kubetesting.Action) (handled bool, ret runtime.Object, err error) {
+		//	patched = true
+		//	return true, &v1alpha1.Application{}, nil
+		//})
+		func() {
+			fakeAppCs.Lock()
+			defer fakeAppCs.Unlock()
+			fakeAppCs.PrependReactor("patch", "*", func(action kubetesting.Action) (handled bool, ret runtime.Object, err error) {
+				patched = true
+				return true, &v1alpha1.Application{}, nil
+				//if patchAction, ok := action.(kubetesting.PatchAction); ok {
+				//	require.NoError(t, json.Unmarshal(patchAction.GetPatch(), &receivedPatch))
+				//}
+				//return true, &v1alpha1.Application{}, nil
+			})
+		}()
+
 		err := ctrl.finalizeApplicationDeletion(app, func(_ string) ([]*v1alpha1.Cluster, error) {
 			return []*v1alpha1.Cluster{}, nil
 		})
@@ -1016,8 +1035,10 @@ func TestFinalizeAppDeletion(t *testing.T) {
 
 		testShouldDelete := func(app *v1alpha1.Application) {
 			appObj := kube.MustToUnstructured(&app)
+			liveRole := &unstructured.Unstructured{Object: newFakeRole()}
 			ctrl := newFakeController(&fakeData{apps: []runtime.Object{app, &defaultProj}, managedLiveObjs: map[kube.ResourceKey]*unstructured.Unstructured{
-				kube.GetResourceKey(appObj): appObj,
+				kube.GetResourceKey(appObj):   appObj,
+				kube.GetResourceKey(liveRole): liveRole,
 			}}, nil)
 
 			fakeAppCs := ctrl.applicationClientset.(*appclientset.Clientset)
@@ -1160,9 +1181,12 @@ func TestFinalizeAppDeletion(t *testing.T) {
 			patched = true
 			return true, &v1alpha1.Application{}, nil
 		})
+		fakeAppCs.Lock()
 		err := ctrl.finalizeApplicationDeletion(app, func(_ string) ([]*v1alpha1.Cluster, error) {
 			return []*v1alpha1.Cluster{}, nil
 		})
+
+		//ctrl.kubectl(*MockKubectl).
 		require.NoError(t, err)
 		// post-delete hooks are deleted
 		require.Len(t, ctrl.kubectl.(*MockKubectl).DeletedResources, 4)
@@ -1228,9 +1252,13 @@ func TestFinalizeAppDeletion(t *testing.T) {
 			patched = true
 			return true, &v1alpha1.Application{}, nil
 		})
-		fakeAppCs.AddReactor("patch", "appprojects", func(_ kubetesting.Action) (handled bool, ret runtime.Object, err error) {
-			patched = true
+		fakeAppCs.AddReactor("patch", "applicationprojects", func(_ kubetesting.Action) (handled bool, ret runtime.Object, err error) {
+			patched = false
 			return true, &v1alpha1.AppProject{}, nil
+		})
+		fakeAppCs.AddReactor("patch", "*", func(_ kubetesting.Action) (handled bool, ret runtime.Object, err error) {
+			patched = true
+			return true, &v1alpha1.Application{}, nil
 		})
 
 		err = ctrl.finalizeApplicationDeletion(defaultProjectApp, func(_ string) ([]*v1alpha1.Cluster, error) {
@@ -1304,6 +1332,76 @@ func TestFinalizeAppDeletion(t *testing.T) {
 		expectedNames := []string{"hook-serviceaccount", "developer", "hook-role"}
 		require.ElementsMatch(t, expectedNames, deletedResources, "Deleted resources should match expected names")
 		assert.True(t, patched)
+	})
+
+	t.Run("Test_Error_Patching_Project", func(t *testing.T) {
+		defaultProjectApp := newFakeApp()
+		defaultProjectApp.Spec.Destination.Namespace = test.FakeArgoCDNamespace
+		defaultProjectApp.Spec.Project = "default"
+		defaultProjectApp.SetFinalizers([]string{v1alpha1.ResourcesFinalizerName})
+		defaultProjectApp.Name = "defaultProjectApp"
+
+		////////// CREATE PROJECTS //////////
+		liveRole := &unstructured.Unstructured{Object: newFakeRole()}
+		liveServiceAccount := &unstructured.Unstructured{Object: newFakeServiceAccount()}
+		liveAppProjectDeveloper := &unstructured.Unstructured{Object: newFakeAppProject()}
+		liveAppProjectDeveloper.SetName("developer")
+		////////// MARSHALLING //////////
+		developerProject := &v1alpha1.AppProject{}
+		origJSON, err := json.Marshal(liveAppProjectDeveloper)
+		if err != nil {
+			panic(err)
+		}
+		if err = json.Unmarshal(origJSON, &developerProject); err != nil {
+			panic(err)
+		}
+
+		defaultProjectApp.DeletionTimestamp = &testTimestamp
+		ctrl := newFakeController(&fakeData{
+			manifestResponses: []*apiclient.ManifestResponse{{
+				Manifests: []string{fakeRole, fakeServiceAccount, fakeAppProjectDeveloper},
+			}},
+			apps: []runtime.Object{defaultProjectApp, &defaultProj, developerProject},
+			managedLiveObjs: map[kube.ResourceKey]*unstructured.Unstructured{
+				kube.GetResourceKey(liveRole):                liveRole,
+				kube.GetResourceKey(liveServiceAccount):      liveServiceAccount,
+				kube.GetResourceKey(liveAppProjectDeveloper): liveAppProjectDeveloper,
+			},
+		}, nil)
+
+		errorAddingProjectFinalizer := false
+		errorListingApplications := false
+		fakeAppCs := ctrl.applicationClientset.(*appclientset.Clientset)
+		//testDataAppLister := testData.NewFakeProjLister()
+		//fakeAppLister := ctrl.appLister.(testDataAppLister)
+		defaultReactor := fakeAppCs.ReactionChain[0]
+		fakeAppCs.ReactionChain = nil
+		fakeAppCs.AddReactor("get", "*", func(action kubetesting.Action) (handled bool, ret runtime.Object, err error) {
+			return defaultReactor.React(action)
+		})
+		fakeAppCs.AddReactor("patch", "appprojects", func(_ kubetesting.Action) (handled bool, ret runtime.Object, err error) {
+			errorAddingProjectFinalizer = true
+			return true, &v1alpha1.AppProject{}, errors.New("error adding project finalizer")
+		})
+		//fakeAppLister.
+		//fakeAppCs.AddReactor("list", "*", func(_ kubetesting.Action) (handled bool, ret runtime.Object, err error) {
+		//	errorListingApplications = true
+		//	return true, &v1alpha1.AppProject{}, errors.New("error listing applications")
+		//})
+
+		err = ctrl.finalizeApplicationDeletion(defaultProjectApp, func(_ string) ([]*v1alpha1.Cluster, error) {
+			return []*v1alpha1.Cluster{}, nil
+		})
+		assert.True(t, errorAddingProjectFinalizer)
+		assert.True(t, errorListingApplications)
+		//require.NoError(t, err)
+		//require.Len(t, ctrl.kubectl.(*MockKubectl).DeletedResources, 3)
+		//deletedResources := []string{}
+		//for _, res := range ctrl.kubectl.(*MockKubectl).DeletedResources {
+		//	deletedResources = append(deletedResources, res.Name)
+		//}
+		//expectedNames := []string{"hook-serviceaccount", "developer", "hook-role"}
+		//require.ElementsMatch(t, expectedNames, deletedResources, "Deleted resources should match expected names")
 	})
 }
 
